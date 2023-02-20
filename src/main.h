@@ -20,6 +20,18 @@
     OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */
 
+#if defined(__FreeBSD__)
+typedef int SInt32;
+typedef unsigned char UInt8;
+typedef unsigned short UInt16;
+typedef unsigned int UInt32;
+typedef int IOReturn;
+#define EXIT_SUCCESS 1
+#define EXIT_FAILURE 0
+#define kIOReturnSuccess 1
+#define kIOReturnError   0
+#endif
+
 /* 0xB042-0xB044 is XDFP (DSP interface) data in  */
 /* 0xB045-0xB046 is XDFP address/command interface */
 /* 0xB05C-0xB05E is XDFP data out (unused here) */
@@ -91,6 +103,15 @@ static UInt8 pluginBinary[] = {
 };
 
 
+#if defined(__FreeBSD__)
+libusb_device_handle* open_device(libusb_context *ctx, int vid, int pid);
+IOReturn xdfpSetMem(struct libusb_device_handle *deviceInterface, UInt8 *buf, UInt16 length, UInt16 xdfpAddr);
+IOReturn xdfpWrite(struct libusb_device_handle *deviceInterface, UInt16 xdfpAddr, SInt32 value);
+IOReturn downloadEQ(struct libusb_device_handle *deviceInterface, enum TrinityAvailablePower availablePower);
+IOReturn downloadPlugin(struct libusb_device_handle *deviceInterface);
+IOReturn disablePlugin(struct libusb_device_handle *deviceInterface);
+IOReturn enablePlugin(struct libusb_device_handle *deviceInterface);
+#else
 int main(int argc, char *argv[]);
 IOReturn xdfpSetMem(IOUSBDeviceInterface300** deviceInterface, UInt8 *buf, UInt16 length, UInt16 xdfpAddr);
 IOReturn xdfpWrite(IOUSBDeviceInterface300** deviceInterface, UInt16 xdfpAddr, SInt32 value);
@@ -99,3 +120,4 @@ IOReturn downloadPlugin(IOUSBDeviceInterface300** deviceInterface);
 IOReturn disablePlugin(IOUSBDeviceInterface300** deviceInterface);
 IOReturn enablePlugin(IOUSBDeviceInterface300** deviceInterface);
 IOUSBDeviceInterface300** usbDeviceInterfaceFromVIDPID(SInt32 vid, SInt32 pid);
+#endif

@@ -22,12 +22,16 @@
 
 #include <stdio.h>
 #include <string.h>
+#if defined(__FreeBSD__)
+#include <libusb.h>
+#else
 #include <CoreFoundation/CoreFoundation.h>
 #include <libkern/OSByteOrder.h>
 #include <IOKit/IOKitLib.h>
 #include <IOKit/IOCFPlugIn.h>
 #include <IOKit/usb/IOUSBLib.h>
 #include <IOKit/usb/USBSpec.h>
+#endif
 #include "main.h"
 
 UInt8 disableplugin_value= 0xba;
@@ -35,7 +39,12 @@ UInt8 disableplugin_value= 0xba;
 int main(int argc, char *argv[]) {
   int i, ret;
   enum TrinityAvailablePower availablePower;
+#if defined(__FreeBSD__)
+  libusb_context *ctx = NULL;
+  libusb_device_handle *deviceInterface;
+#else
   IOUSBDeviceInterface300** deviceInterface;
+#endif
 
   /* Reading power delivery capacity */
   availablePower = POWER_NULL;
@@ -65,6 +74,19 @@ int main(int argc, char *argv[]) {
     return EXIT_SUCCESS;
   }
 
+#if defined(__FreeBSD__)
+  /* libusb initialize*/
+  if (libusb_init(&ctx) < 0) {
+    perror("libusb_init\n");
+    return EXIT_FAILURE;
+  }
+
+  deviceInterface = open_device(ctx, 0x05AC, 0x1101);
+  if (deviceInterface == -1) {
+    printf("Device not found\n");
+    return EXIT_FAILURE;
+  }
+#else
   /* Getting USB device interface */
   deviceInterface = usbDeviceInterfaceFromVIDPID(0x05AC,0x1101);
   if (deviceInterface == NULL) {
@@ -81,6 +103,7 @@ int main(int argc, char *argv[]) {
     printf("Could not open device. Quitting…\n");
     return EXIT_FAILURE;
   }
+#endif
   
   if (disablePlugin(deviceInterface) != kIOReturnSuccess) {
     printf("Error while disabling plugin.\n");
@@ -100,11 +123,90 @@ int main(int argc, char *argv[]) {
   }
 
   /* Closing the USB device */
+#if defined(__FreeBSD__)
+  libusb_close(deviceInterface);
+  libusb_exit(ctx);
+#else
   (*deviceInterface)->USBDeviceClose(deviceInterface);
+#endif
 
   return EXIT_SUCCESS;
 }
 
+#if defined(__FreeBSD__)
+libusb_device_handle* open_device(libusb_context *ctx, int vid, int pid) {
+  struct libusb_device_handle *devh = NULL;
+  libusb_device *dev;
+  libusb_device **devs;
+
+  int r = 1;
+  int i = 0;
+  int cnt = 0;
+
+//  libusb_set_debug(ctx, 3);
+
+  if ((libusb_get_device_list(ctx, &devs)) < 0) {
+//    perror("no usb device found");
+//    exit(1);
+    return -1;
+  }
+
+  /* check every usb devices */
+  while ((dev = devs[i++]) != NULL) {
+    struct libusb_device_descriptor desc;
+    if (libusb_get_device_descriptor(dev, &desc) < 0) {
+      perror("failed to get device descriptor\n");
+    }
+    /* count how many device connected */
+    if (desc.idVendor == vid && desc.idProduct == pid) {
+      cnt++;
+    }
+  }
+
+  /* device not found */
+  if (cnt == 0) {
+//    fprintf(stderr, "device not connected or lack of permissions\n");
+//    exit(1);
+    return -1;
+  }
+
+  if (cnt > 1) {
+//    fprintf(stderr, "multi device is not implemented yet\n");
+//    exit(1);
+    return -1;
+  }
+
+
+  /* open device */
+  if ((devh = libusb_open_device_with_vid_pid(ctx, vid, pid)) < 0) {
+    perror("can't find device\n");
+//    close_device(ctx, devh);
+//    exit(1);
+    return -1;
+  }
+
+  /* detach kernel driver if attached. */
+  r = libusb_kernel_driver_active(devh, 3);
+  if (r == 1) {
+    /* detaching kernel driver */
+    r = libusb_detach_kernel_driver(devh, 3);
+    if (r != 0) {
+//      perror("detaching kernel driver failed");
+//      exit(1);
+      return -1;
+    }
+  }
+
+  r = libusb_claim_interface(devh, 0);
+  if (r < 0) {
+//    fprintf(stderr, "claim interface failed (%d): %s\n", r, strerror(errno));
+//    exit(1);
+    return -1;
+  }
+
+  return devh;
+}
+#else
 IOUSBDeviceInterface300** usbDeviceInterfaceFromVIDPID(SInt32 vid, SInt32 pid) {
   CFMutableDictionaryRef matchingDict;
   io_iterator_t usbRefIterator;
@@ -153,7 +255,18 @@ IOUSBDeviceInterface300** usbDeviceInterfaceFromVIDPID(SInt32 vid, SInt32 pid) {
     return deviceInterface;
   }
 }
+#endif
 
+#if defined(__FreeBSD__)
+IOReturn xdfpSetMem(struct libusb_device_handle *deviceInterface, UInt8 *buf, UInt16 length, UInt16 xdfpAddr) {
+  int r;
+
+  r = libusb_control_transfer(deviceInterface,
+    LIBUSB_ENDPOINT_OUT | LIBUSB_REQUEST_TYPE_VENDOR | LIBUSB_RECIPIENT_DEVICE,
+    kMicronasSetMemReq, 0, xdfpAddr, buf, length, 1000);
+  return r < 0 ? kIOReturnError : kIOReturnSuccess;
+}
+#else
 IOReturn xdfpSetMem(IOUSBDeviceInterface300** deviceInterface, UInt8 *buf, UInt16 length, UInt16 xdfpAddr) {
   IOUSBDevRequest devReq;
 
@@ -166,8 +279,13 @@ IOReturn xdfpSetMem(IOUSBDeviceInterface300** deviceInterface, UInt8 *buf, UInt1
 
   return (*deviceInterface)->DeviceRequest(deviceInterface, &devReq);
 }
+#endif
 
+#if defined(__FreeBSD__)
+IOReturn xdfpWrite(struct libusb_device_handle *deviceInterface, UInt16 xdfpAddr, SInt32 value) {
+#else
 IOReturn xdfpWrite(IOUSBDeviceInterface300** deviceInterface, UInt16 xdfpAddr, SInt32 value) {
+#endif
   static UInt8 xdfpData[5];
 
     if (value < 0) value += 0x40000;
@@ -180,7 +298,11 @@ IOReturn xdfpWrite(IOUSBDeviceInterface300** deviceInterface, UInt16 xdfpAddr, S
     return xdfpSetMem(deviceInterface, xdfpData, 5, V8_WRITE_START_ADDR);
 }
 
+#if defined(__FreeBSD__)
+IOReturn downloadEQ(struct libusb_device_handle *deviceInterface, enum TrinityAvailablePower availablePower) {
+#else
 IOReturn downloadEQ(IOUSBDeviceInterface300** deviceInterface, enum TrinityAvailablePower availablePower) {
+#endif
   UInt16 xdfpAddr;
   UInt32 eqIndex;
   IOReturn ret;
@@ -214,14 +336,26 @@ IOReturn downloadEQ(IOUSBDeviceInterface300** deviceInterface, enum TrinityAvail
   return ret;
 }
 
+#if defined(__FreeBSD__)
+IOReturn disablePlugin(struct libusb_device_handle *deviceInterface) {
+#else
 IOReturn disablePlugin(IOUSBDeviceInterface300** deviceInterface) {
+#endif
   return xdfpSetMem(deviceInterface, &disableplugin_value, 1, V8_PLUGIN_START_ADDR);
 }
 
+#if defined(__FreeBSD__)
+int enablePlugin(struct libusb_device_handle *deviceInterface) {
+#else
 IOReturn enablePlugin(IOUSBDeviceInterface300** deviceInterface) {
+#endif
   return xdfpSetMem(deviceInterface, pluginBinary, 1, V8_PLUGIN_START_ADDR);
 }
 
+#if defined(__FreeBSD__)
+IOReturn downloadPlugin(struct libusb_device_handle *deviceInterface) {
+#else
 IOReturn downloadPlugin(IOUSBDeviceInterface300** deviceInterface) {
+#endif
   return xdfpSetMem(deviceInterface, &pluginBinary[1], sizeof(pluginBinary), V8_PLUGIN_START_ADDR+1);
 }
