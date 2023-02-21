@@ -1,11 +1,15 @@
 # project name (generate executable with this name)
 TARGET   = trinityenabler
 
+ifeq ($(shell uname), FreeBSD)
+LFLAGS   = -lusb
+else
 # compiling flags here
 CFLAGS   = -std=c99 -Wall -I. -pedantic -Werror -O3
 
 # linking flags here
 LFLAGS   = -Wall -I. -lm -framework IOKit -framework Foundation
+endif
 
 # change these to proper directories where each file should be
 SRCDIR   = src
